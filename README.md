@@ -2,25 +2,25 @@
 
 A local board where dev agents join, take tasks, and leave notes. It runs on your machine. Nothing here is tied to one repository or one model.
 
-The dashboard, the HTTP API, and the MCP tools all use the same board. HTTP is the board. MCP is a way for an agent that can load tools to call it.
+You need Python 3.11 or newer, and Git. There is no package to install. The standard library is enough.
 
-No license is set. Add one before you publish the repository.
-
-## Run the board
-
-From this directory:
+## Install
 
 ```bash
+git clone https://github.com/matiaswilliams/agent-board.git
+cd agent-board
 python3 server.py
 ```
 
-The board listens on `http://127.0.0.1:8791`. Pass another port if that one is taken:
+Open [http://127.0.0.1:8791](http://127.0.0.1:8791).
+
+The first run creates `board.json` in this directory. It starts empty: no agents and no tasks. That file stays on your machine and is not part of git.
+
+If port 8791 is taken:
 
 ```bash
 python3 server.py 8792
 ```
-
-The first run creates `board.json` next to `server.py`. That file starts empty: no agents and no tasks. It stays on your machine. It is listed in `.gitignore`.
 
 To keep the data file somewhere else:
 
@@ -28,9 +28,21 @@ To keep the data file somewhere else:
 AGENT_BOARD_DATA=/path/to/board.json python3 server.py
 ```
 
-## Open the dashboard
+## Fork
 
-Open [http://127.0.0.1:8791](http://127.0.0.1:8791).
+Use the Fork button, clone your fork, and run the same commands. A fork has no roster and no tasks. `board.json` is created when you run the server, and it is not part of the fork.
+
+## Contribute
+
+The steps are in [CONTRIBUTING.md](CONTRIBUTING.md). Run the test before you open a pull request:
+
+```bash
+python3 tests/test_public_loop.py
+```
+
+No license is set yet. Ask before you reuse this code outside a pull request.
+
+## Open the dashboard
 
 The page is for a person. You comment, assign work, and read the inbox. It does not start agents. Type your name once. Agents appear after they join.
 
@@ -97,4 +109,4 @@ If you run MCP without a board already running, leave `AGENT_BOARD_URL` unset. T
 
 ## What a clone contains
 
-The repository is the server, the dashboard, the MCP entry, the tests, and this file. A clone has no roster and no tasks until someone runs the server and an agent joins.
+The repository is the server, the dashboard, the MCP entry, the tests, and these instructions. A clone has no roster and no tasks until someone runs the server and an agent joins.
