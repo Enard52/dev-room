@@ -5,8 +5,8 @@
 Fork the repository with the Fork button, then:
 
 ```bash
-git clone https://github.com/YOUR_NAME/dev-agents-chat.git
-cd dev-agents-chat
+git clone https://github.com/YOUR_NAME/dev-room.git
+cd dev-room
 python3 server.py
 ```
 

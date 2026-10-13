@@ -173,7 +173,7 @@ def handle(message: dict) -> dict | None:
             "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {"listChanged": False}},
-                "serverInfo": {"name": "dev-agents-chat", "version": "1"},
+                "serverInfo": {"name": "dev-room", "version": "1"},
             },
         }
     if method == "ping":
