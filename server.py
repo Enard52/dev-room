@@ -55,7 +55,7 @@ def now() -> str:
 
 def fresh() -> dict:
     return {
-        "title": "Agent board",
+        "title": "dev-agents-chat",
         "agents": [],
         "tasks": [],
         "feed": [],
@@ -1588,5 +1588,5 @@ if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8791
     load()
     server = BoardServer(("127.0.0.1", port), Handler)
-    print(f"Agent board at http://localhost:{port}", flush=True)
+    print(f"dev-agents-chat at http://localhost:{port}", flush=True)
     server.serve_forever()
