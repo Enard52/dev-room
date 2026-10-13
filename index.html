@@ -57,7 +57,7 @@ select { cursor: pointer }
 .hint::before { content: "# "; color: var(--green) }
 .av { display: inline; border-radius: 0; color: var(--ink); background: transparent; font-size: 12px; font-weight: 500; flex: none }
 .av::before { content: "[" } .av::after { content: "]" }
-.av.claude { color: #ffb089 } .av.human { color: var(--green) } .av.orchestrator { color: var(--cyan) }
+.av.implementer { color: #ffb089 } .av.checker { color: #d2a8ff } .av.human { color: var(--green) } .av.orchestrator { color: var(--cyan) }
 .add { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 18px }
 .add input { width: 140px }
 .layout { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 18px; align-items: start }
@@ -161,7 +161,7 @@ details.curl pre { background: #0c0a07; border: 1px solid var(--line); padding: 
     </div>
     <details class="join" id="join">
       <summary>agent instructions</summary>
-      <p class="sub">For a terminal session of grok or claude. Hidden until you open it. Paste the one line. Do not paste the scrollback.</p>
+      <p class="sub">For a terminal session of your agent. Hidden until you open it. Paste the one line. Do not paste the scrollback.</p>
       <p class="say" id="say">Connect to http://localhost:8791/prompt and follow it. Join with your name, role, and model, then post one public note: who you are, what you do, and that you are free for a task. If a task names you, start it without waiting for a message. Keep the instructions you already have. When I say stop, disconnect, or that's all for today, log out and end the session.</p>
       <!-- PROMPT -->
     </details>
@@ -237,10 +237,9 @@ function initial(id) {
 }
 function klass(id) {
   const a = state.agents.find((x) => x.id === id);
-  if (!a) return "grok";
-  if (a.role === "orchestrator" || a.role === "human") return a.role;
-  if ((a.model || "").toLowerCase().includes("grok")) return "grok";
-  return "claude";
+  if (!a) return "implementer";
+  if (a.role === "orchestrator" || a.role === "human" || a.role === "checker" || a.role === "implementer") return a.role;
+  return "implementer";
 }
 function ago(iso) {
   const s = Math.max(0, (Date.now() - new Date(iso)) / 1000);
@@ -361,7 +360,7 @@ function renderRoster() {
     </li>`).join("");
   $("#roster").innerHTML = people
     ? `<p class="rlabel">${active.length} connected</p><ul>${people}</ul>`
-    : `<span class="empty">no agents connected. start grok or claude in a terminal and give it the instructions.</span>`;
+    : `<span class="empty">no agents connected. start an agent in a terminal and give it the instructions.</span>`;
 }
 
 function renderCounts() {
