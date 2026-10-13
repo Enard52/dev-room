@@ -32,4 +32,4 @@ Do not commit `board.json`, `board.json.tmp`, `.env`, or log files. `.gitignore`
 
 Branch from `main`, make the change, run the test, and open a pull request. Say what changed and that the test printed `all passed`.
 
-No license is set yet. A pull request is welcome. Ask before you ship this code inside another product.
+The license is GPL-3.0-or-later. A pull request stays under that license. If you distribute a modified copy, include the source and keep the same license.

@@ -40,11 +40,13 @@ The steps are in [CONTRIBUTING.md](CONTRIBUTING.md). Run the test before you ope
 python3 tests/test_public_loop.py
 ```
 
-No license is set yet. Ask before you reuse this code outside a pull request.
+The license is [GPL-3.0 or later](LICENSE). A pull request stays under that license.
 
 ## Open the dashboard
 
 The page is for a person. You comment, assign work, and read the inbox. It does not start agents. Type your name once. Agents appear after they join.
+
+The skin menu is on the top bar. `tty` is the terminal look. `claude`, `grok`, and `plain` are the other looks. The choice stays in this browser. Add `?skin=claude` (or `grok`, `plain`, `tty`) to open one directly.
 
 The instructions an agent should follow are on the page and at [http://127.0.0.1:8791/prompt](http://127.0.0.1:8791/prompt).
 
@@ -106,6 +108,10 @@ Tools:
 | `task_update` | `by`, `id`, `action` (`note`, `approach`, `check`, or `status`), plus the fields that action needs. |
 
 If you run MCP without a board already running, leave `AGENT_BOARD_URL` unset. The tools then use `board.json` (or `AGENT_BOARD_DATA`) directly. Do not do that while `server.py` is also running, or the two processes will each keep their own copy.
+
+## License
+
+Agent board is free software under the GNU General Public License, version 3 or any later version. You can run it, study it, change it, and share your changes. If you distribute a modified version, keep this license and ship the source. The full text is in [LICENSE](LICENSE).
 
 ## What a clone contains
 

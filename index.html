@@ -1,4 +1,5 @@
 <!doctype html>
+<!-- Copyright (C) 2026 Matías Williams. SPDX-License-Identifier: GPL-3.0-or-later -->
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -6,11 +7,22 @@
 <title>agent-board — tty</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;500;600&family=Space+Grotesk:wght@400;500;600&display=swap">
+<script>
+(function () {
+  var allowed = { tty: 1, claude: 1, grok: 1, plain: 1 };
+  var query = new URLSearchParams(location.search).get("skin");
+  var saved = "";
+  try { saved = localStorage.getItem("agent-board-skin") || ""; } catch (e) {}
+  var skin = allowed[query] ? query : (allowed[saved] ? saved : "tty");
+  document.documentElement.setAttribute("data-skin", skin);
+})();
+</script>
 <style>
 :root {
   --bg: #1c1916;
   --panel: #24211d;
+  --screen: #211e1a;
   --ink: #e7dcc8;
   --dim: #9c9080;
   --line: #3a342c;
@@ -18,11 +30,32 @@
   --red: #d08984;
   --cyan: #8aa3ad;
   --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  --font: var(--mono);
+  --field: #0c0a07;
+  --chip: #1c1916;
+  --raised: #2c2823;
+  --edge: #5c554c;
+  --button: #2c2823;
+  --button-ink: #e7dcc8;
+  --button-edge: #5c554c;
+  --button-hover: #3a342c;
+  --sink: #140f0a;
+  --role-implementer: #ffb089;
+  --role-checker: #d2a8ff;
+  --radius: 0;
+  --prompt: "$ ";
+  --mark: "# ";
+  --trail: "> ";
+  --av-open: "[";
+  --av-close: "]";
+  --err-tag: "ERR ";
+  --lift: none;
+  --menu-shadow: 0 10px 28px rgba(0, 0, 0, .45);
 }
 * { box-sizing: border-box }
-html, body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--mono); font-size: 14px; line-height: 1.55 }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font); font-size: 14px; line-height: 1.55 }
 :focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px }
-.screen { max-width: 1180px; margin: 28px auto 56px; border: 1px solid var(--line); background: #211e1a; }
+.screen { max-width: 1180px; margin: 28px auto 56px; border: 1px solid var(--line); background: var(--screen); border-radius: var(--radius); box-shadow: var(--lift); }
 .chrome { display: flex; justify-content: space-between; gap: 12px; align-items: center; flex-wrap: wrap; padding: 8px 12px; border-bottom: 1px solid var(--line); color: var(--dim); font-size: 12px }
 .chrome b { color: var(--green); font-weight: 500 }
 .wrap { padding: 18px 16px 36px }
@@ -38,14 +71,14 @@ h1 { font-weight: 500; font-size: 22px; margin: 0; letter-spacing: -0.02em }
 .on-dot { color: var(--green) }
 .off-dot { color: var(--dim) }
 select, input, textarea, button { font: inherit; color: var(--ink) }
-select, input, textarea { border: 1px solid var(--line); border-radius: 0; background: #0c0a07; padding: 7px 10px; max-width: 100% }
+select, input, textarea { border: 1px solid var(--line); border-radius: var(--radius); background: var(--field); padding: 7px 10px; max-width: 100% }
 select { appearance: none; -webkit-appearance: none; min-width: 0 }
 textarea { width: 100%; resize: vertical }
 select { cursor: pointer }
 .roster { margin: 22px 0 8px }
 .rlabel { margin: 0; color: var(--dim); font-size: 12px }
 .roster ul { list-style: none; margin: 8px 0 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 8px }
-.person { display: grid; grid-template-columns: 8px 1fr; column-gap: 10px; align-items: start; padding: 10px 12px; border: 1px solid var(--line); background: #1c1916 }
+.person { display: grid; grid-template-columns: 8px 1fr; column-gap: 10px; align-items: start; padding: 10px 12px; border: 1px solid var(--line); background: var(--chip); border-radius: var(--radius) }
 .person.off { opacity: .45 }
 .person .dot { width: 7px; height: 7px; margin-top: 6px; border-radius: 50%; background: var(--dim) }
 .person .dot.on { background: var(--green) }
@@ -54,62 +87,63 @@ select { cursor: pointer }
 .psub { color: var(--dim); font-size: 12px; margin-top: 2px }
 .aid { color: var(--dim); font-size: 12px }
 .hint { color: var(--dim); font-size: 12px; margin: 0 0 8px }
-.hint::before { content: "# "; color: var(--green) }
-.av { display: inline; border-radius: 0; color: var(--ink); background: transparent; font-size: 12px; font-weight: 500; flex: none }
-.av::before { content: "[" } .av::after { content: "]" }
-.av.implementer { color: #ffb089 } .av.checker { color: #d2a8ff } .av.human { color: var(--green) } .av.orchestrator { color: var(--cyan) }
+.hint::before { content: var(--mark); color: var(--green) }
+.av { display: inline; border-radius: var(--radius); color: var(--ink); background: transparent; font-size: 12px; font-weight: 500; flex: none }
+.av::before { content: var(--av-open) } .av::after { content: var(--av-close) }
+.av.implementer { color: var(--role-implementer) } .av.checker { color: var(--role-checker) } .av.human { color: var(--green) } .av.orchestrator { color: var(--cyan) }
 .add { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 18px }
 .add input { width: 140px }
 .layout { display: grid; grid-template-columns: minmax(0, 1fr) 360px; gap: 18px; align-items: start }
 .layout > * { min-width: 0 }
 .new-task .row select { flex: 1 1 0 }
 .counts { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 14px }
-.counts button { border: 1px solid var(--line); background: transparent; border-radius: 0; padding: 5px 10px; font-weight: 500; font-size: 12px; color: var(--dim); cursor: pointer }
-.counts button.on { background: #2c2823; color: var(--ink); border-color: #5c554c }
+.counts button { border: 1px solid var(--line); background: transparent; border-radius: var(--radius); padding: 5px 10px; font-weight: 500; font-size: 12px; color: var(--dim); cursor: pointer }
+.counts button.on { background: var(--raised); color: var(--ink); border-color: var(--edge) }
 .counts b { font-weight: 500 }
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: 0; padding: 14px; margin-bottom: 12px }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; margin-bottom: 12px }
 .card h2 { font-size: 15px; margin: 0 0 4px; font-weight: 500 }
-.card h2::before { content: "$ "; color: var(--green) }
+.card h2::before { content: var(--prompt); color: var(--green) }
 .meta { color: var(--dim); font-size: 12px }
-.pill { display: inline-block; border-radius: 0; padding: 0 6px; font-size: 12px; font-weight: 500; margin-left: 6px; border: 1px solid currentColor }
+.pill { display: inline-block; border-radius: var(--radius); padding: 0 6px; font-size: 12px; font-weight: 500; margin-left: 6px; border: 1px solid currentColor }
 .pill.open { color: var(--cyan) }
 .pill.working { color: var(--ink) }
 .pill.done, .pill.approved { color: var(--green) }
 .pill.rejected { color: var(--red) }
 .pill.stopped { color: var(--dim) }
-.how { margin-top: 12px; background: #0c0a07; border-left: 2px solid var(--green); padding: 8px 12px }
+.how { margin-top: 12px; background: var(--field); border-left: 2px solid var(--green); padding: 8px 12px; border-radius: var(--radius) }
 .how b { display: block; font-size: 12px; color: var(--green); font-weight: 500 }
-.how b::before { content: "$ " }
+.how b::before { content: var(--prompt) }
 .how p { margin: 4px 0 0; white-space: pre-wrap }
 .trail { list-style: none; margin: 10px 0 0; padding: 0; border-top: 1px dashed var(--line) }
 .trail li { padding: 8px 0; border-bottom: 1px dashed var(--line); font-size: 13px }
 .trail .when { color: var(--dim); font-size: 11px }
-.trail .when::before { content: "> "; color: var(--green) }
+.trail .when::before { content: var(--trail); color: var(--green) }
 .actions { display: grid; gap: 8px; margin-top: 12px }
 .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center }
-.row button, .primary { border: 1px solid #5c554c; border-radius: 0; padding: 6px 10px; cursor: pointer; background: #2c2823; color: var(--ink); font-weight: 500 }
-.row button.ghost { background: transparent }
-.row button:hover, .primary:hover { background: #3a342c }
-.feed { position: sticky; top: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: 0; display: flex; flex-direction: column; max-height: calc(100vh - 32px) }
+.row button, .primary { border: 1px solid var(--button-edge); border-radius: var(--radius); padding: 6px 10px; cursor: pointer; background: var(--button); color: var(--button-ink); font-weight: 500 }
+.row button.ghost { background: transparent; color: var(--ink) }
+.row button:hover, .primary:hover { background: var(--button-hover) }
+.row button.ghost:hover { background: transparent }
+.feed { position: sticky; top: 16px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); display: flex; flex-direction: column; max-height: calc(100vh - 32px) }
 .feed-head, .compose { padding: 12px 14px; border-bottom: 1px solid var(--line) }
 .feed-head { display: flex; justify-content: space-between; align-items: center }
 .feed-head h2 { margin: 0; font-weight: 500; font-size: 15px }
-.feed-head h2::before { content: "$ "; color: var(--green) }
+.feed-head h2::before { content: var(--prompt); color: var(--green) }
 .live { display: inline-flex; gap: 6px; align-items: center; color: var(--green); font-size: 12px }
 .live i { width: 7px; height: 7px; border-radius: 50%; background: var(--green) }
 .compose { display: grid; gap: 8px }
 .mention-wrap { position: relative; }
-.mentions { position: absolute; left: 0; right: 0; top: calc(100% + 4px); margin: 0; padding: 0; list-style: none; background: #1c1916; border: 1px solid var(--line); z-index: 20; max-height: min(320px, 46vh); overflow: auto; box-shadow: 0 10px 28px rgba(0,0,0,.45) }
+.mentions { position: absolute; left: 0; right: 0; top: calc(100% + 4px); margin: 0; padding: 0; list-style: none; background: var(--chip); border: 1px solid var(--line); border-radius: var(--radius); z-index: 20; max-height: min(320px, 46vh); overflow: auto; box-shadow: var(--menu-shadow) }
 .mentions[hidden] { display: none }
 .mentions li { padding: 6px 10px; cursor: pointer }
-.mentions li.on { background: #2c2823 }
+.mentions li.on { background: var(--raised) }
 .entries { list-style: none; margin: 0; padding: 4px 0; overflow: auto }
 .entry { display: grid; grid-template-columns: auto 1fr; gap: 8px; padding: 10px 14px }
 .entry .txt { white-space: pre-wrap; word-break: break-word; font-size: 13px }
 .dm { color: var(--cyan) }
 .err { color: var(--red); font-size: 13px; min-height: 1.2em }
 .err:empty { display: none }
-.err:not(:empty)::before { content: "ERR "; }
+.err:not(:empty)::before { content: var(--err-tag) }
 .empty { color: var(--dim); padding: 8px 2px 16px }
 .new-task { display: grid; gap: 8px; margin-bottom: 14px }
 .new-task .row input, .actions .row input { flex: 1 1 120px; min-width: 0 }
@@ -119,27 +153,129 @@ select { cursor: pointer }
 .reject-box { display: grid; gap: 8px; margin-top: 8px }
 .reject-box summary { cursor: pointer; color: var(--dim); font-size: 12px }
 .tick { display: flex; gap: 8px; align-items: center; color: var(--dim); font-size: 12px }
-.inbox { margin: 0 0 18px; border: 1px solid var(--line); background: var(--panel); padding: 12px 14px }
+.inbox { margin: 0 0 18px; border: 1px solid var(--line); background: var(--panel); border-radius: var(--radius); padding: 12px 14px }
 .inbox h2 { margin: 0 0 8px; font-size: 15px; font-weight: 500 }
-.inbox h2::before { content: "$ "; color: var(--green) }
+.inbox h2::before { content: var(--prompt); color: var(--green) }
 .inbox h2 b { color: var(--dim); font-weight: 500 }
 .inbox h2 b.hot { color: var(--green) }
 .inbox .card { margin-bottom: 8px }
 .inbox .card:last-child { margin-bottom: 0 }
 .inbox .empty { padding-bottom: 0 }
-.join { background: #0c0a07; border: 1px solid var(--line); border-radius: 0; padding: 14px; margin: 18px 0 }
+.join { background: var(--field); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; margin: 18px 0 }
 .join summary { cursor: pointer; font-weight: 500; font-size: 15px; margin: 0 }
-.join summary::before { content: "$ "; color: var(--green) }
+.join summary::before { content: var(--prompt); color: var(--green) }
 .join summary::-webkit-details-marker { display: none }
-.join .say { font-size: 13px; background: #140f0a; border: 1px dashed var(--line); padding: 10px 12px; margin: 10px 0 }
-.join .say::before { content: "$ "; color: var(--green) }
+.join summary::marker { content: "" }
+.join .say { font-size: 13px; background: var(--sink); border: 1px dashed var(--line); border-radius: var(--radius); padding: 10px 12px; margin: 10px 0 }
+.join .say::before { content: var(--prompt); color: var(--green) }
 .join pre { white-space: pre-wrap; font-family: var(--mono); font-size: 12px; line-height: 1.45; background: transparent; color: var(--ink); padding: 8px 0 0; max-height: 420px; overflow: auto; margin: 0 }
 details.curl { margin-top: 18px; color: var(--dim); font-size: 13px }
 details.curl summary { cursor: pointer }
-details.curl pre { background: #0c0a07; border: 1px solid var(--line); padding: 12px; overflow: auto; font-size: 12px; color: var(--ink) }
+details.curl pre { background: var(--field); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; overflow: auto; font-size: 12px; color: var(--ink) }
+.chrome-end { display: inline-flex; gap: 10px; align-items: center }
+.skinpick { display: inline-flex; align-items: center; gap: 6px }
+.skinpick select { padding: 2px 8px; background: transparent }
+html[data-skin="claude"] {
+  --bg: #f4efe6;
+  --panel: #fbf7f1;
+  --screen: #fbf7f1;
+  --ink: #2b2118;
+  --dim: #7d6a5c;
+  --line: #e4d5c5;
+  --green: #c96442;
+  --red: #9c3b30;
+  --cyan: #a24b32;
+  --font: "Source Serif 4", Georgia, serif;
+  --field: #fffdfb;
+  --chip: #f7f1e8;
+  --raised: #f3e6dc;
+  --edge: #e4cbb8;
+  --button: #c96442;
+  --button-ink: #fffaf6;
+  --button-edge: #c96442;
+  --button-hover: #b4533a;
+  --sink: #f6eee6;
+  --role-implementer: #9a3412;
+  --role-checker: #7c4a2d;
+  --radius: 14px;
+  --prompt: "";
+  --mark: "";
+  --trail: "";
+  --av-open: "";
+  --av-close: "";
+  --err-tag: "";
+  --lift: 0 16px 40px rgba(70, 44, 24, .06);
+  --menu-shadow: 0 12px 28px rgba(70, 44, 24, .12);
+}
+html[data-skin="claude"] body { font-size: 16px }
+html[data-skin="grok"] {
+  --bg: #000;
+  --panel: #0a0a0a;
+  --screen: #000;
+  --ink: #f4f4f4;
+  --dim: #8d8d8d;
+  --line: #242424;
+  --green: #f4f4f4;
+  --red: #ff4d2e;
+  --cyan: #c8c8c8;
+  --font: "Space Grotesk", system-ui, sans-serif;
+  --field: #111;
+  --chip: #070707;
+  --raised: #161616;
+  --edge: #3a3a3a;
+  --button: #f4f4f4;
+  --button-ink: #000;
+  --button-edge: #f4f4f4;
+  --button-hover: #dedede;
+  --sink: #050505;
+  --role-implementer: #f4f4f4;
+  --role-checker: #a3a3a3;
+  --radius: 0;
+  --prompt: "";
+  --mark: "";
+  --trail: "";
+  --av-open: "";
+  --av-close: "";
+  --err-tag: "";
+  --lift: none;
+  --menu-shadow: 0 10px 28px rgba(0, 0, 0, .6);
+}
+html[data-skin="plain"] {
+  --bg: #f3f4f6;
+  --panel: #fff;
+  --screen: #fff;
+  --ink: #1f2328;
+  --dim: #59636e;
+  --line: #d8dee4;
+  --green: #1a7f37;
+  --red: #cf222e;
+  --cyan: #0969da;
+  --font: system-ui, sans-serif;
+  --field: #fff;
+  --chip: #fff;
+  --raised: #eef2f6;
+  --edge: #d0d7de;
+  --button: #0969da;
+  --button-ink: #fff;
+  --button-edge: #0969da;
+  --button-hover: #0757b5;
+  --sink: #f6f8fa;
+  --role-implementer: #bc4c00;
+  --role-checker: #8250df;
+  --radius: 8px;
+  --prompt: "";
+  --mark: "";
+  --trail: "";
+  --av-open: "";
+  --av-close: "";
+  --err-tag: "";
+  --lift: 0 1px 2px rgba(31, 35, 40, .06);
+  --menu-shadow: 0 8px 24px rgba(31, 35, 40, .12);
+}
 @media (max-width: 900px) {
   .screen { margin: 0; border-left: 0; border-right: 0 }
   .chrome span:nth-child(2) { display: none }
+  .chrome-end { width: 100%; justify-content: flex-end }
   .layout, .roster ul { grid-template-columns: 1fr }
   .feed { position: static; max-height: 70vh }
 }
@@ -148,7 +284,7 @@ details.curl pre { background: #0c0a07; border: 1px solid var(--line); padding: 
 </head>
 <body>
 <div class="screen">
-  <div class="chrome"><span><b>CARRIER</b> agent-board</span><span>/dev/tty.agents</span><span>127.0.0.1:8791</span></div>
+  <div class="chrome"><span><b id="chrome-mark">CARRIER</b> <span id="chrome-name">agent-board</span></span><span id="chrome-mid">/dev/tty.agents</span><span class="chrome-end"><span id="chrome-host">127.0.0.1:8791</span><label class="skinpick">skin <select id="skin" aria-label="Skin"><option value="tty">tty</option><option value="claude">claude</option><option value="grok">grok</option><option value="plain">plain</option></select></label></span></div>
   <div class="wrap">
     <div class="top">
       <div>
@@ -194,7 +330,7 @@ details.curl pre { background: #0c0a07; border: 1px solid var(--line); padding: 
         </details>
       </section>
       <aside class="feed">
-        <div class="feed-head"><h2>tail -f /dev/agents</h2><span class="live"><i></i> CARRIER</span></div>
+        <div class="feed-head"><h2 id="feed-title">tail -f /dev/agents</h2><span class="live"><i></i> <span id="live-label">CARRIER</span></span></div>
         <form class="compose" id="compose">
           <div class="mention-wrap">
             <ul class="mentions" id="mentions" hidden></ul>
@@ -213,6 +349,34 @@ let state = { agents: [], tasks: [], feed: [] };
 let filter = "all";
 const meKey = "agent-board-me";
 const nameKey = "agent-board-human-name";
+const skinKey = "agent-board-skin";
+const skinCopy = {
+  tty: { mark: "CARRIER", name: "agent-board", mid: "/dev/tty.agents", feed: "tail -f /dev/agents", live: "CARRIER", title: "agent-board — tty" },
+  claude: { mark: "agent-board", name: "", mid: "local", feed: "notes", live: "live", title: "agent-board" },
+  grok: { mark: "GROK", name: "board", mid: "local", feed: "feed", live: "live", title: "agent-board" },
+  plain: { mark: "agent-board", name: "", mid: "dashboard", feed: "feed", live: "live", title: "agent-board" },
+};
+function applySkin(name) {
+  if (!skinCopy[name]) name = "tty";
+  document.documentElement.dataset.skin = name;
+  try { localStorage.setItem(skinKey, name); } catch (e) {}
+  const copy = skinCopy[name];
+  $("#chrome-mark").textContent = copy.mark;
+  $("#chrome-name").textContent = copy.name;
+  $("#chrome-mid").textContent = copy.mid;
+  $("#chrome-host").textContent = location.host;
+  $("#feed-title").textContent = copy.feed;
+  $("#live-label").textContent = copy.live;
+  document.title = copy.title;
+  const picker = $("#skin");
+  if (picker && picker.value !== name) picker.value = name;
+  const url = new URL(location.href);
+  if (name === "tty") url.searchParams.delete("skin");
+  else url.searchParams.set("skin", name);
+  if (url.href !== location.href) history.replaceState(null, "", url);
+}
+applySkin(document.documentElement.dataset.skin || "tty");
+$("#skin").addEventListener("change", () => applySkin($("#skin").value));
 
 function nameOf(id) {
   const a = state.agents.find((x) => x.id === id);
