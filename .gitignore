@@ -9,3 +9,6 @@ __pycache__/
 .env
 .env.*
 *.log
+
+# Browser tooling output
+.playwright-mcp/

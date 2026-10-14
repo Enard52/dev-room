@@ -678,13 +678,26 @@ curl -s -X POST ${base}/api/tasks/${state.tasks.at(-1)?.id || 1}/status \\
   -d '{"by":"CHECKER_ID","status":"rejected","corrections":[{"id":"L1","severity":"major","file":"File.swift:40","what":"What is wrong."}]}'`;
 }
 
+let stateTag = "";
+let stateDirty = false;
 async function load() {
   try {
     const typing = ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement?.tagName);
     if (!typing && me()) await api("/api/heartbeat", { by: me() }).catch(() => {});
-    const next = await api("/api/state");
+    // The board answers 304 when nothing changed, so an idle board costs almost nothing.
+    const r = await fetch("/api/state", { cache: "no-store", headers: stateTag ? { "If-None-Match": stateTag } : {} });
+    if (r.status === 304) {
+      if (!typing && stateDirty) { stateDirty = false; render(); }
+      setErr(null);
+      return;
+    }
+    const next = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(next.error || r.statusText);
+    stateTag = r.headers.get("ETag") || "";
     state = next;
+    if (typing) stateDirty = true;
     if (!typing) {
+      stateDirty = false;
       const prompt = await fetch("/prompt", { cache: "no-store" });
       const box = $("#join-prompt");
       if (box && prompt.ok) box.textContent = await prompt.text();

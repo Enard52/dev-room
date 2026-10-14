@@ -20,7 +20,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DATA = os.environ.get("AGENT_BOARD_DATA") or os.path.join(HERE, "board.json")
+# DEV_ROOM_* is the current name. AGENT_BOARD_* still works.
+DATA = (
+    os.environ.get("DEV_ROOM_DATA")
+    or os.environ.get("AGENT_BOARD_DATA")
+    or os.path.join(HERE, "board.json")
+)
 INDEX = os.path.join(HERE, "index.html")
 LOCK = threading.Lock()
 
@@ -39,6 +44,10 @@ BRANCH_STOP = {
 }
 # A poll every four minutes still counts. The prompt says four minutes.
 ONLINE_SECONDS = 360
+# The board only answers to this machine. A Host or Origin outside this list is
+# a web page or a DNS rebinding attempt, not a local agent.
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "[::1]", "::1"}
+SWEEP_SECONDS = 60
 
 
 def _escape(text: str) -> str:
@@ -66,6 +75,8 @@ def fresh() -> dict:
 
 # One process owns the board. Polls read this copy. Disk is for restarts.
 _BOARD: dict | None = None
+# Goes up on every save. The dashboard uses it to skip unchanged state.
+_REV = 0
 
 
 def load() -> dict:
@@ -88,8 +99,9 @@ def _write(data: dict) -> None:
 
 
 def save(data: dict) -> None:
-    global _BOARD
+    global _BOARD, _REV
     _BOARD = data
+    _REV += 1
     _write(data)
 
 
@@ -548,6 +560,9 @@ def stall_stopped(task: dict) -> bool:
     logs = task.get("log") or []
     if not logs:
         return False
+    if task.get("stop_kind"):
+        return task["stop_kind"] == "idle"
+    # Boards from before stop_kind only have the log text.
     return "No log for 120 minutes" in (logs[-1].get("text") or "")
 
 
@@ -709,8 +724,10 @@ def stop_notice(task: dict, reason: str) -> str:
     return f"Task #{task['id']} stopped. {reason}{count}{extra}"
 
 
-def stop_working(data: dict, task: dict, reason: str) -> None:
+def stop_working(data: dict, task: dict, reason: str, kind: str = "") -> None:
     task["status"] = "stopped"
+    if kind:
+        task["stop_kind"] = kind
     found = orchestrators(data)
     by = found[0]["id"] if found else (task.get("owner") or "board")
     log(task, by, reason, "stopped", "status")
@@ -744,7 +761,7 @@ def release_stale(data: dict) -> bool:
             if any(same_commit(old, new) for old in shas for new in later):
                 continue
             pr = sorted(shared)[0]
-            stop_working(data, task, f"Its sha is older than a later done sha on PR #{pr}.")
+            stop_working(data, task, f"Its sha is older than a later done sha on PR #{pr}.", "superseded")
             changed = True
             break
     for task in list(data.get("tasks") or []):
@@ -752,14 +769,14 @@ def release_stale(data: dict) -> bool:
             continue
         touched = last_activity(task)
         if touched and (moment - touched).total_seconds() >= STALE_SECONDS:
-            stop_working(data, task, "No log for 120 minutes.")
+            stop_working(data, task, "No log for 120 minutes.", "idle")
             changed = True
     for task in list(data.get("tasks") or []):
         if task.get("status") != "open" or latest_approach(task):
             continue
         touched = last_activity(task)
         if touched and (moment - touched).total_seconds() >= OPEN_IDLE_SECONDS:
-            stop_working(data, task, "No approach for 60 minutes.")
+            stop_working(data, task, "No approach for 60 minutes.", "no-approach")
             changed = True
     return changed
 
@@ -1053,6 +1070,40 @@ def board_call(op: str, payload: dict | None = None) -> tuple[int, object]:
         return 404, {"error": "unknown operation"}
 
 
+def host_name(value: str) -> str:
+    """The host part of a Host header or an Origin, without scheme or port."""
+    raw = (value or "").strip().lower()
+    if "://" in raw:
+        raw = raw.split("://", 1)[1]
+    raw = raw.split("/", 1)[0]
+    if raw.startswith("["):
+        return raw.split("]", 1)[0] + "]"
+    return raw.rsplit(":", 1)[0] if raw.count(":") == 1 else raw
+
+
+def local_request(headers) -> str | None:
+    """None when the request comes from this machine. Otherwise the reason it is refused."""
+    if host_name(headers.get("Host") or "") not in LOCAL_HOSTS:
+        return "the board only answers to localhost or 127.0.0.1"
+    origin = headers.get("Origin")
+    if origin and (origin == "null" or host_name(origin) not in LOCAL_HOSTS):
+        return "requests from other sites are refused"
+    return None
+
+
+def sweep_forever() -> None:
+    """Stop stale tasks even when nobody polls."""
+    while True:
+        threading.Event().wait(SWEEP_SECONDS)
+        try:
+            with LOCK:
+                data = load()
+                if release_stale(data):
+                    save(data)
+        except Exception as exc:  # keep sweeping after a bad row
+            print(f"sweep failed: {exc}", file=sys.stderr, flush=True)
+
+
 class BoardServer(ThreadingHTTPServer):
     # A stuck client must not keep the process alive or fill the accept queue.
     daemon_threads = True
@@ -1068,27 +1119,29 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def handle_error(self, request, client_address):
-        exc = sys.exception()
+        exc = sys.exc_info()[1]
         if isinstance(exc, (BrokenPipeError, ConnectionResetError, TimeoutError)):
             return
         super().handle_error(request, client_address)
 
-    def _send(self, code: int, body, ctype: str = "application/json; charset=utf-8") -> None:
+    def _send(self, code: int, body, ctype: str = "application/json; charset=utf-8", etag: str = "") -> None:
         # Queued so the socket write happens after the board lock is released.
         raw = body if isinstance(body, bytes) else json.dumps(body, ensure_ascii=False).encode()
-        self._pending = (code, raw, ctype)
+        self._pending = (code, raw, ctype, etag)
 
     def _flush(self) -> None:
         pending = getattr(self, "_pending", None)
         if not pending:
             return
         self._pending = None
-        code, raw, ctype = pending
+        code, raw, ctype, etag = pending
         try:
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(raw)))
             self.send_header("Cache-Control", "no-store")
+            if etag:
+                self.send_header("ETag", etag)
             self.end_headers()
             self.wfile.write(raw)
         except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
@@ -1099,9 +1152,10 @@ class Handler(BaseHTTPRequestHandler):
         if not n:
             return {}
         try:
-            return json.loads(self.rfile.read(n).decode("utf-8"))
-        except json.JSONDecodeError:
+            body = json.loads(self.rfile.read(n).decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
             return {"__invalid__": True}
+        return body if isinstance(body, dict) else {"__invalid__": True}
 
     def _require_author(self, data: dict, body: dict):
         found, err = resolve(data, body.get("by") or "", active_only=True)
@@ -1118,6 +1172,9 @@ class Handler(BaseHTTPRequestHandler):
             self._flush()
 
     def _do_GET(self):
+        refused = local_request(self.headers)
+        if refused:
+            return self._send(403, {"error": refused})
         path, _, query = self.path.partition("?")
         if path in ("/", "/index.html", "/prompt"):
             host = self.headers.get("Host") or "localhost:8791"
@@ -1134,8 +1191,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/state":
             with LOCK:
                 data = load()
-                if release_stale(data):
-                    save(data)
+                # Online flags change with time, not only with saves, so the tag
+                # also turns over every 30 seconds.
+                etag = f'"{_REV}-{int(datetime.now(UTC).timestamp()) // 30}"'
+                if self.headers.get("If-None-Match") == etag:
+                    return self._send(304, b"", etag=etag)
                 agents = []
                 for row in data["agents"]:
                     item = dict(row)
@@ -1147,7 +1207,7 @@ class Handler(BaseHTTPRequestHandler):
                     item["approach"] = latest_approach(task)
                     tasks.append(item)
                 body = json.dumps({**data, "agents": agents, "tasks": tasks}, ensure_ascii=False).encode()
-            return self._send(200, body)
+            return self._send(200, body, etag=etag)
         if path == "/api/feed":
             params = parse_qs(query)
             who = (params.get("for") or [""])[0]
@@ -1164,6 +1224,13 @@ class Handler(BaseHTTPRequestHandler):
             self._flush()
 
     def _do_POST(self):
+        refused = local_request(self.headers)
+        if refused:
+            return self._send(403, {"error": refused})
+        # A web page can send text/plain without a preflight. JSON needs one.
+        ctype = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if ctype != "application/json":
+            return self._send(415, {"error": "send Content-Type: application/json"})
         path = self.path.split("?")[0]
         body = self._body()
         if body.get("__invalid__"):
@@ -1179,14 +1246,13 @@ class Handler(BaseHTTPRequestHandler):
                 author = self._require_author(data, body)
                 if not author:
                     return None
-                save(data)
-                author["online"] = True
-                return self._send(200, author)
+                # last_seen lives in memory. The next real save writes it.
+                return self._send(200, {**author, "online": True})
             if path == "/api/agents":
                 return self._add_agent(data, body)
             parts = path.strip("/").split("/")
             if len(parts) == 4 and parts[:2] == ["api", "agents"]:
-                return self._agent_action(data, parts[2], parts[3])
+                return self._agent_action(data, parts[2], parts[3], body)
             if path == "/api/feed":
                 return self._post_feed(data, body)
             if path == "/api/tasks":
@@ -1196,10 +1262,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._task_action(data, parts[2], parts[3], body)
             return self._send(404, {"error": "unknown path"})
 
-    def _agent_action(self, data: dict, aid: str, action: str):
+    def _agent_action(self, data: dict, aid: str, action: str, body: dict):
+        author = self._require_author(data, body)
+        if not author:
+            return None
         found = agent(data, aid)
         if not found:
             return self._send(404, {"error": "no such agent"})
+        if author["role"] not in {"human", "orchestrator"} and author["id"] != found["id"]:
+            return self._send(403, {"error": "only the human or an orchestrator can remove or restore another agent"})
         if action == "remove":
             found["active"] = False
         elif action == "restore":
@@ -1587,6 +1658,7 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8791
     load()
+    threading.Thread(target=sweep_forever, daemon=True).start()
     server = BoardServer(("127.0.0.1", port), Handler)
     print(f"dev-room at http://localhost:{port}", flush=True)
     server.serve_forever()

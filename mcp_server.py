@@ -3,10 +3,14 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """MCP stdio server for the local agent board.
 
-The tools call the same operations as the HTTP routes. When AGENT_BOARD_URL is
+The tools call the same operations as the HTTP routes. When DEV_ROOM_URL is
 set, this process forwards to that running board so it does not keep a second
 copy of the data. Without that variable, the tools read and write the data
-file themselves (AGENT_BOARD_DATA, or board.json next to server.py).
+file themselves (DEV_ROOM_DATA, or board.json next to server.py). The older
+AGENT_BOARD_URL and AGENT_BOARD_DATA names still work.
+
+Messages on stdio are one JSON object per line, as the MCP stdio transport
+requires. A Content-Length framed message is still read, for old test clients.
 """
 
 import json
@@ -17,6 +21,12 @@ import urllib.parse
 import urllib.request
 
 import server
+
+SUPPORTED_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
+
+
+def board_url() -> str:
+    return os.environ.get("DEV_ROOM_URL") or os.environ.get("AGENT_BOARD_URL") or ""
 
 TOOLS = [
     {
@@ -118,7 +128,7 @@ def _http_json(method: str, url: str, payload: dict | None = None):
 
 
 def _via_http(name: str, arguments: dict) -> tuple[int, object]:
-    base = os.environ["AGENT_BOARD_URL"].rstrip("/")
+    base = board_url().rstrip("/")
     if name == "join":
         return _http_json("POST", base + "/api/join", arguments)
     if name == "feed":
@@ -139,7 +149,7 @@ def _via_http(name: str, arguments: dict) -> tuple[int, object]:
 def call_tool(name: str, arguments: dict | None = None) -> dict:
     """Run one shipped board tool. Returns the board JSON."""
     arguments = arguments or {}
-    if os.environ.get("AGENT_BOARD_URL"):
+    if board_url():
         code, body = _via_http(name, arguments)
     else:
         code, body = _direct(name, arguments)
@@ -167,11 +177,13 @@ def handle(message: dict) -> dict | None:
         return None
     msg_id = message.get("id")
     if method == "initialize":
+        asked = (message.get("params") or {}).get("protocolVersion")
+        version = asked if asked in SUPPORTED_VERSIONS else SUPPORTED_VERSIONS[0]
         return {
             "jsonrpc": "2.0",
             "id": msg_id,
             "result": {
-                "protocolVersion": "2024-11-05",
+                "protocolVersion": version,
                 "capabilities": {"tools": {"listChanged": False}},
                 "serverInfo": {"name": "dev-room", "version": "1"},
             },
@@ -192,6 +204,8 @@ def handle(message: dict) -> dict | None:
 
 def read_message():
     line = sys.stdin.buffer.readline()
+    while line and not line.strip():
+        line = sys.stdin.buffer.readline()
     if not line:
         return None
     if line.lstrip().startswith(b"{"):
@@ -209,16 +223,22 @@ def read_message():
 
 
 def write_message(message: dict) -> None:
-    raw = json.dumps(message).encode()
-    sys.stdout.buffer.write(f"Content-Length: {len(raw)}\r\n\r\n".encode() + raw)
+    # json.dumps escapes newlines inside strings, so one message is one line.
+    sys.stdout.buffer.write(json.dumps(message).encode() + b"\n")
     sys.stdout.buffer.flush()
 
 
 def main() -> None:
     while True:
-        message = read_message()
+        try:
+            message = read_message()
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
+            write_message({"jsonrpc": "2.0", "id": None, "error": {"code": -32700, "message": f"parse error: {exc}"}})
+            continue
         if message is None:
             return
+        if "method" not in message:
+            continue  # a reply to a request this server never sends
         reply = handle(message)
         if reply is not None:
             write_message(reply)
