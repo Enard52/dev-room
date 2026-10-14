@@ -20,7 +20,8 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 DATA_DIR = tempfile.mkdtemp(prefix="agent-board-public-")
-os.environ["AGENT_BOARD_DATA"] = os.path.join(DATA_DIR, "board.json")
+os.environ["DEV_ROOM_DATA"] = os.path.join(DATA_DIR, "board.json")
+os.environ.pop("DEV_ROOM_URL", None)
 os.environ.pop("AGENT_BOARD_URL", None)
 
 import mcp_server  # noqa: E402
@@ -57,21 +58,13 @@ def http(method, base, path, payload=None):
 
 
 def mcp_round(proc, message):
-    raw = json.dumps(message).encode()
-    proc.stdin.write(f"Content-Length: {len(raw)}\r\n\r\n".encode() + raw)
+    """One request and its reply, one JSON object per line, as MCP stdio clients send them."""
+    proc.stdin.write(json.dumps(message).encode() + b"\n")
     proc.stdin.flush()
-    headers = {}
-    while True:
-        line = proc.stdout.readline()
-        if not line:
-            raise RuntimeError("mcp server closed stdout")
-        if line in (b"\r\n", b"\n"):
-            break
-        if b":" in line:
-            key, value = line.decode().split(":", 1)
-            headers[key.strip().lower()] = value.strip()
-    length = int(headers.get("content-length") or 0)
-    return json.loads(proc.stdout.read(length).decode())
+    line = proc.stdout.readline()
+    if not line:
+        raise RuntimeError("mcp server closed stdout")
+    return json.loads(line.decode())
 
 
 def boot_server(number: int):
@@ -80,8 +73,8 @@ def boot_server(number: int):
     data_path = os.path.join(work, "board.json")
     port = 8870 + number
     env = os.environ.copy()
-    env["AGENT_BOARD_DATA"] = data_path
-    env.pop("AGENT_BOARD_URL", None)
+    env["DEV_ROOM_DATA"] = data_path
+    env.pop("DEV_ROOM_URL", None)
     proc = subprocess.Popen(
         [sys.executable, os.path.join(ROOT, "server.py"), str(port)],
         cwd=ROOT,
@@ -112,7 +105,7 @@ def boot_server(number: int):
             and "No open, working, rejected, or done tasks." in prompt
         )
         check(f"boot {number} is an empty board", empty, {"code": code, "agents": state.get("agents"), "tasks": state.get("tasks")})
-        scratch = os.environ.get("AGENT_BOARD_SCRATCH")
+        scratch = os.environ.get("DEV_ROOM_SCRATCH")
         if scratch and empty:
             os.makedirs(scratch, exist_ok=True)
             with open(os.path.join(scratch, f"boot-{number}.txt"), "w", encoding="utf-8") as handle:
@@ -127,7 +120,7 @@ def boot_server(number: int):
 
 
 def main():
-    data_path = os.environ["AGENT_BOARD_DATA"]
+    data_path = os.environ["DEV_ROOM_DATA"]
     check("fresh file is absent", not os.path.exists(data_path))
     fresh = server.load()
     check("fresh roster is empty", fresh["agents"] == [] and fresh["tasks"] == [] and fresh["feed"] == [])
@@ -197,8 +190,8 @@ def main():
     launch_error = ""
     try:
         env = os.environ.copy()
-        env["AGENT_BOARD_URL"] = base
-        env["AGENT_BOARD_DATA"] = data_path
+        env["DEV_ROOM_URL"] = base
+        env["DEV_ROOM_DATA"] = data_path
         proc = subprocess.Popen(
             [sys.executable, os.path.join(ROOT, "mcp_server.py")],
             stdin=subprocess.PIPE,
@@ -231,7 +224,7 @@ def main():
     except Exception as exc:
         launch_error = f"{type(exc).__name__}: {exc}"
         print("mcp launcher failed", launch_error)
-    scratch = os.environ.get("AGENT_BOARD_SCRATCH")
+    scratch = os.environ.get("DEV_ROOM_SCRATCH")
     if scratch and launch_error:
         os.makedirs(scratch, exist_ok=True)
         with open(os.path.join(scratch, "mcp-launch-error.log"), "w", encoding="utf-8") as handle:
