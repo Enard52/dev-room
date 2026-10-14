@@ -15,12 +15,17 @@ import re
 import subprocess
 import sys
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-DATA = os.environ.get("AGENT_BOARD_DATA") or os.path.join(HERE, "board.json")
+# DEV_ROOM_* is the current name. AGENT_BOARD_* still works.
+DATA = (
+    os.environ.get("DEV_ROOM_DATA")
+    or os.environ.get("AGENT_BOARD_DATA")
+    or os.path.join(HERE, "board.json")
+)
 INDEX = os.path.join(HERE, "index.html")
 LOCK = threading.Lock()
 
@@ -39,6 +44,19 @@ BRANCH_STOP = {
 }
 # A poll every four minutes still counts. The prompt says four minutes.
 ONLINE_SECONDS = 360
+# The board only answers to this machine. A Host or Origin outside this list is
+# a web page or a DNS rebinding attempt, not a local agent.
+LOCAL_HOSTS = {"127.0.0.1", "localhost", "[::1]", "::1"}
+SWEEP_SECONDS = 60
+# A feed read without since returns only this many of the newest posts.
+FEED_LIMIT = 50
+FEED_LIMIT_MAX = 500
+# Closed tasks and feed posts older than this move to board-archive/.
+# Zero turns archiving off.
+try:
+    ARCHIVE_DAYS = float(os.environ.get("DEV_ROOM_ARCHIVE_DAYS") or 7)
+except ValueError:
+    ARCHIVE_DAYS = 7.0
 
 
 def _escape(text: str) -> str:
@@ -66,6 +84,8 @@ def fresh() -> dict:
 
 # One process owns the board. Polls read this copy. Disk is for restarts.
 _BOARD: dict | None = None
+# Goes up on every save. The dashboard uses it to skip unchanged state.
+_REV = 0
 
 
 def load() -> dict:
@@ -88,8 +108,9 @@ def _write(data: dict) -> None:
 
 
 def save(data: dict) -> None:
-    global _BOARD
+    global _BOARD, _REV
     _BOARD = data
+    _REV += 1
     _write(data)
 
 
@@ -548,6 +569,9 @@ def stall_stopped(task: dict) -> bool:
     logs = task.get("log") or []
     if not logs:
         return False
+    if task.get("stop_kind"):
+        return task["stop_kind"] == "idle"
+    # Boards from before stop_kind only have the log text.
     return "No log for 120 minutes" in (logs[-1].get("text") or "")
 
 
@@ -709,8 +733,10 @@ def stop_notice(task: dict, reason: str) -> str:
     return f"Task #{task['id']} stopped. {reason}{count}{extra}"
 
 
-def stop_working(data: dict, task: dict, reason: str) -> None:
+def stop_working(data: dict, task: dict, reason: str, kind: str = "") -> None:
     task["status"] = "stopped"
+    if kind:
+        task["stop_kind"] = kind
     found = orchestrators(data)
     by = found[0]["id"] if found else (task.get("owner") or "board")
     log(task, by, reason, "stopped", "status")
@@ -744,7 +770,7 @@ def release_stale(data: dict) -> bool:
             if any(same_commit(old, new) for old in shas for new in later):
                 continue
             pr = sorted(shared)[0]
-            stop_working(data, task, f"Its sha is older than a later done sha on PR #{pr}.")
+            stop_working(data, task, f"Its sha is older than a later done sha on PR #{pr}.", "superseded")
             changed = True
             break
     for task in list(data.get("tasks") or []):
@@ -752,14 +778,14 @@ def release_stale(data: dict) -> bool:
             continue
         touched = last_activity(task)
         if touched and (moment - touched).total_seconds() >= STALE_SECONDS:
-            stop_working(data, task, "No log for 120 minutes.")
+            stop_working(data, task, "No log for 120 minutes.", "idle")
             changed = True
     for task in list(data.get("tasks") or []):
         if task.get("status") != "open" or latest_approach(task):
             continue
         touched = last_activity(task)
         if touched and (moment - touched).total_seconds() >= OPEN_IDLE_SECONDS:
-            stop_working(data, task, "No approach for 60 minutes.")
+            stop_working(data, task, "No approach for 60 minutes.", "no-approach")
             changed = True
     return changed
 
@@ -917,7 +943,7 @@ Logged out, absent until they join again: {removed}
 
    curl -s '{base}/api/feed?for=YOUR_ID'
 
-   Add &since=ISO-8601 on later polls so the feed list is only new posts. Poll at least every four minutes. You go offline after six minutes without a read or a post. The tasks array on that same response is your live queue every time, even when the feed list is empty. A post with no "to" is public. A post with "to" is a direct message. The filtered feed returns public posts, messages to you, and messages you sent. A direct message is a pointer, not a private channel. A feed note is at most 600 characters. Post your introduction once. A second public note that starts the same way is refused. Do not post "Task #N is done" in the feed. The board already tells the checker. A working task with no log for 120 minutes is stopped. An open task with no approach for 60 minutes is stopped. A review of an older sha is stopped when a later sha on the same PR is done or approved. A stopped task with an open checklist comes back to its owner on the feed queue. So does that owner's newest idle stop when the last note is not a finish. The stop line goes to the owner and names the last note.
+   Without since, the feed list is your newest 50 posts, and omitted says how many older ones were left out. Add &limit=N for more, up to 500. Add &since=ISO-8601 on later polls so the feed list is only new posts. Poll at least every four minutes. You go offline after six minutes without a read or a post. The tasks array on that same response is your live queue every time, even when the feed list is empty. A post with no "to" is public. A post with "to" is a direct message. The filtered feed returns public posts, messages to you, and messages you sent. A direct message is a pointer, not a private channel. A feed note is at most 600 characters. Post your introduction once. A second public note that starts the same way is refused. Do not post "Task #N is done" in the feed. The board already tells the checker. A working task with no log for 120 minutes is stopped. An open task with no approach for 60 minutes is stopped. A review of an older sha is stopped when a later sha on the same PR is done or approved. A stopped task with an open checklist comes back to its owner on the feed queue. So does that owner's newest idle stop when the last note is not a finish. The stop line goes to the owner and names the last note.
 
 4. Work the tasks that name you. Do not wait for a direct message, and do not wait to be asked again. The snapshot below is only the moment you read this prompt, and it leaves out approved and stopped tasks. On every poll, read tasks from /api/feed?for=YOUR_ID. If duty is "do", the task is yours: status open or rejected means post an approach, then do the work. You post that approach even if your role is checker. Owning the task is what matters. Status working means continue, and do not post the same approach again. Status stopped on your queue means the checklist is still open, or the idle stop was not a finish. Post a new approach and continue. If duty is "check", the task is done and you review it now. When the assigned checker is offline, that duty is also on every other online agent's queue except the owner's, and any of them may approve or reject it. A human does not receive those tasks. The board also messages you when a task is assigned to you, sent back, or ready for review. That message is one line. It is a start, not a permission slip, and it does not repeat the brief. Silence is not a reason to stay idle.
 
@@ -991,8 +1017,13 @@ Roles, on top of the instructions you already have:
 """
 
 
-def read_feed(data: dict, who: str = "", since: str = "") -> tuple[int, dict]:
-    """Feed and task queue for one agent. Saves only when a stale task is stopped."""
+def read_feed(data: dict, who: str = "", since: str = "", limit: str = "") -> tuple[int, dict]:
+    """Feed and task queue for one agent. Saves only when a stale task is stopped.
+
+    Without since, the feed list is the newest posts only, so a first read does
+    not fill an agent's context with the whole history. omitted says how many
+    older posts were left out.
+    """
     if release_stale(data):
         save(data)
     posts = list(data.get("feed") or [])
@@ -1004,12 +1035,92 @@ def read_feed(data: dict, who: str = "", since: str = "") -> tuple[int, dict]:
         mark_seen(found)
         agent_id = found["id"]
         posts = [post for post in posts if feed_visible(post, agent_id)]
+    omitted = 0
     if since:
-        posts = [post for post in posts if post["at"] > since]
-    payload = {"feed": posts}
+        # An unescaped + in a query string arrives as a space.
+        try:
+            after = parse_at(since.strip().replace(" ", "+"))
+        except ValueError:
+            return 400, {"error": "since must be an ISO-8601 time, like 2026-10-14T10:00:00+01:00"}
+        posts = [post for post in posts if parse_at(post["at"]) > after]
+    else:
+        try:
+            cap = int(limit) if limit else FEED_LIMIT
+        except ValueError:
+            return 400, {"error": "limit must be a number"}
+        cap = max(1, min(cap, FEED_LIMIT_MAX))
+        if len(posts) > cap:
+            omitted = len(posts) - cap
+            posts = posts[-cap:]
+    payload = {"feed": posts, "omitted": omitted}
     if agent_id:
         payload["tasks"] = agent_tasks(data, agent_id)
     return 200, payload
+
+
+def archive_dir() -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(DATA)), "board-archive")
+
+
+def archive_old(data: dict, moment: datetime | None = None, days: float | None = None) -> int:
+    """Move closed tasks and feed posts older than days to board-archive/YYYY-MM.jsonl.
+
+    A task is closed when it is approved, or stopped and not handed back to its
+    owner. Each archived line is {"kind": "task" | "post", "item": ...}. The
+    lines are appended before the board is saved, so a crash in between can
+    repeat a line in the archive but never lose one. Returns how many moved.
+    """
+    days = ARCHIVE_DAYS if days is None else days
+    if days <= 0:
+        return 0
+    moment = moment or datetime.now(UTC)
+    cutoff = moment - timedelta(days=days)
+    keep_ids: set[int] = set()
+    for row in data.get("agents") or []:
+        keep_ids |= handed_back(data, row["id"])
+    lines: dict[str, list[str]] = {}
+
+    def month_of(stamp: datetime) -> str:
+        return stamp.astimezone(UTC).strftime("%Y-%m")
+
+    kept_tasks = []
+    for task in data.get("tasks") or []:
+        touched = last_activity(task)
+        old = (
+            task.get("status") in {"approved", "stopped"}
+            and task.get("id") not in keep_ids
+            and touched is not None
+            and touched < cutoff
+        )
+        if not old:
+            kept_tasks.append(task)
+            continue
+        line = json.dumps({"kind": "task", "item": task}, ensure_ascii=False)
+        lines.setdefault(month_of(touched), []).append(line)
+    kept_posts = []
+    for post in data.get("feed") or []:
+        try:
+            at = parse_at(post.get("at") or "")
+        except ValueError:
+            kept_posts.append(post)
+            continue
+        if at >= cutoff:
+            kept_posts.append(post)
+            continue
+        line = json.dumps({"kind": "post", "item": post}, ensure_ascii=False)
+        lines.setdefault(month_of(at), []).append(line)
+    if not lines:
+        return 0
+    folder = archive_dir()
+    os.makedirs(folder, exist_ok=True)
+    moved = 0
+    for month, rows in sorted(lines.items()):
+        with open(os.path.join(folder, f"{month}.jsonl"), "a", encoding="utf-8") as handle:
+            handle.write("\n".join(rows) + "\n")
+        moved += len(rows)
+    data["tasks"] = kept_tasks
+    data["feed"] = kept_posts
+    return moved
 
 
 def apply_handler(method: str, *args) -> tuple[int, object]:
@@ -1037,7 +1148,12 @@ def board_call(op: str, payload: dict | None = None) -> tuple[int, object]:
     with LOCK:
         data = load()
         if op == "feed":
-            return read_feed(data, str(payload.get("for") or payload.get("agent") or ""), str(payload.get("since") or ""))
+            return read_feed(
+                data,
+                str(payload.get("for") or payload.get("agent") or ""),
+                str(payload.get("since") or ""),
+                str(payload.get("limit") or ""),
+            )
         if op == "join":
             return apply_handler("_join", data, payload)
         if op == "note":
@@ -1051,6 +1167,41 @@ def board_call(op: str, payload: dict | None = None) -> tuple[int, object]:
                 payload,
             )
         return 404, {"error": "unknown operation"}
+
+
+def host_name(value: str) -> str:
+    """The host part of a Host header or an Origin, without scheme or port."""
+    raw = (value or "").strip().lower()
+    if "://" in raw:
+        raw = raw.split("://", 1)[1]
+    raw = raw.split("/", 1)[0]
+    if raw.startswith("["):
+        return raw.split("]", 1)[0] + "]"
+    return raw.rsplit(":", 1)[0] if raw.count(":") == 1 else raw
+
+
+def local_request(headers) -> str | None:
+    """None when the request comes from this machine. Otherwise the reason it is refused."""
+    if host_name(headers.get("Host") or "") not in LOCAL_HOSTS:
+        return "the board only answers to localhost or 127.0.0.1"
+    origin = headers.get("Origin")
+    if origin and (origin == "null" or host_name(origin) not in LOCAL_HOSTS):
+        return "requests from other sites are refused"
+    return None
+
+
+def sweep_forever() -> None:
+    """Stop stale tasks and archive old history, even when nobody polls."""
+    while True:
+        threading.Event().wait(SWEEP_SECONDS)
+        try:
+            with LOCK:
+                data = load()
+                stopped = release_stale(data)
+                if archive_old(data) or stopped:
+                    save(data)
+        except Exception as exc:  # keep sweeping after a bad row
+            print(f"sweep failed: {exc}", file=sys.stderr, flush=True)
 
 
 class BoardServer(ThreadingHTTPServer):
@@ -1068,27 +1219,29 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
     def handle_error(self, request, client_address):
-        exc = sys.exception()
+        exc = sys.exc_info()[1]
         if isinstance(exc, (BrokenPipeError, ConnectionResetError, TimeoutError)):
             return
         super().handle_error(request, client_address)
 
-    def _send(self, code: int, body, ctype: str = "application/json; charset=utf-8") -> None:
+    def _send(self, code: int, body, ctype: str = "application/json; charset=utf-8", etag: str = "") -> None:
         # Queued so the socket write happens after the board lock is released.
         raw = body if isinstance(body, bytes) else json.dumps(body, ensure_ascii=False).encode()
-        self._pending = (code, raw, ctype)
+        self._pending = (code, raw, ctype, etag)
 
     def _flush(self) -> None:
         pending = getattr(self, "_pending", None)
         if not pending:
             return
         self._pending = None
-        code, raw, ctype = pending
+        code, raw, ctype, etag = pending
         try:
             self.send_response(code)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(raw)))
             self.send_header("Cache-Control", "no-store")
+            if etag:
+                self.send_header("ETag", etag)
             self.end_headers()
             self.wfile.write(raw)
         except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
@@ -1099,9 +1252,10 @@ class Handler(BaseHTTPRequestHandler):
         if not n:
             return {}
         try:
-            return json.loads(self.rfile.read(n).decode("utf-8"))
-        except json.JSONDecodeError:
+            body = json.loads(self.rfile.read(n).decode("utf-8"))
+        except (json.JSONDecodeError, UnicodeDecodeError):
             return {"__invalid__": True}
+        return body if isinstance(body, dict) else {"__invalid__": True}
 
     def _require_author(self, data: dict, body: dict):
         found, err = resolve(data, body.get("by") or "", active_only=True)
@@ -1118,6 +1272,9 @@ class Handler(BaseHTTPRequestHandler):
             self._flush()
 
     def _do_GET(self):
+        refused = local_request(self.headers)
+        if refused:
+            return self._send(403, {"error": refused})
         path, _, query = self.path.partition("?")
         if path in ("/", "/index.html", "/prompt"):
             host = self.headers.get("Host") or "localhost:8791"
@@ -1134,8 +1291,11 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/state":
             with LOCK:
                 data = load()
-                if release_stale(data):
-                    save(data)
+                # Online flags change with time, not only with saves, so the tag
+                # also turns over every 30 seconds.
+                etag = f'"{_REV}-{int(datetime.now(UTC).timestamp()) // 30}"'
+                if self.headers.get("If-None-Match") == etag:
+                    return self._send(304, b"", etag=etag)
                 agents = []
                 for row in data["agents"]:
                     item = dict(row)
@@ -1147,13 +1307,14 @@ class Handler(BaseHTTPRequestHandler):
                     item["approach"] = latest_approach(task)
                     tasks.append(item)
                 body = json.dumps({**data, "agents": agents, "tasks": tasks}, ensure_ascii=False).encode()
-            return self._send(200, body)
+            return self._send(200, body, etag=etag)
         if path == "/api/feed":
             params = parse_qs(query)
             who = (params.get("for") or [""])[0]
             since = (params.get("since") or [""])[0]
+            limit = (params.get("limit") or [""])[0]
             with LOCK:
-                code, payload = read_feed(load(), who, since)
+                code, payload = read_feed(load(), who, since, limit)
             return self._send(code, payload)
         return self._send(404, {"error": "unknown path"})
 
@@ -1164,6 +1325,13 @@ class Handler(BaseHTTPRequestHandler):
             self._flush()
 
     def _do_POST(self):
+        refused = local_request(self.headers)
+        if refused:
+            return self._send(403, {"error": refused})
+        # A web page can send text/plain without a preflight. JSON needs one.
+        ctype = (self.headers.get("Content-Type") or "").split(";", 1)[0].strip().lower()
+        if ctype != "application/json":
+            return self._send(415, {"error": "send Content-Type: application/json"})
         path = self.path.split("?")[0]
         body = self._body()
         if body.get("__invalid__"):
@@ -1179,14 +1347,13 @@ class Handler(BaseHTTPRequestHandler):
                 author = self._require_author(data, body)
                 if not author:
                     return None
-                save(data)
-                author["online"] = True
-                return self._send(200, author)
+                # last_seen lives in memory. The next real save writes it.
+                return self._send(200, {**author, "online": True})
             if path == "/api/agents":
                 return self._add_agent(data, body)
             parts = path.strip("/").split("/")
             if len(parts) == 4 and parts[:2] == ["api", "agents"]:
-                return self._agent_action(data, parts[2], parts[3])
+                return self._agent_action(data, parts[2], parts[3], body)
             if path == "/api/feed":
                 return self._post_feed(data, body)
             if path == "/api/tasks":
@@ -1196,10 +1363,15 @@ class Handler(BaseHTTPRequestHandler):
                 return self._task_action(data, parts[2], parts[3], body)
             return self._send(404, {"error": "unknown path"})
 
-    def _agent_action(self, data: dict, aid: str, action: str):
+    def _agent_action(self, data: dict, aid: str, action: str, body: dict):
+        author = self._require_author(data, body)
+        if not author:
+            return None
         found = agent(data, aid)
         if not found:
             return self._send(404, {"error": "no such agent"})
+        if author["role"] not in {"human", "orchestrator"} and author["id"] != found["id"]:
+            return self._send(403, {"error": "only the human or an orchestrator can remove or restore another agent"})
         if action == "remove":
             found["active"] = False
         elif action == "restore":
@@ -1586,7 +1758,11 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8791
-    load()
+    with LOCK:
+        data = load()
+        if archive_old(data):
+            save(data)
+    threading.Thread(target=sweep_forever, daemon=True).start()
     server = BoardServer(("127.0.0.1", port), Handler)
     print(f"dev-room at http://localhost:{port}", flush=True)
     server.serve_forever()
