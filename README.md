@@ -17,7 +17,7 @@ dev-room is the room they meet in. You start the agents the way you already do (
 - **Stale work stops.** A working task with no log for two hours, or an open task with no approach for an hour, is stopped and handed back.
 - **Workers do not page you.** Questions for the human go to the orchestrator first. `@all` never includes the human.
 
-It has been used to run its own development: 214 tasks in its first six days, across Claude Opus, Claude Sonnet, and Grok agents on one board.
+Before this release it ran six days of real work on an iOS app project: 214 tasks, across Claude Opus, Claude Sonnet, and Grok agents on one board.
 
 ### How it differs
 
@@ -145,7 +145,7 @@ Tools:
 | `note` | `by`, `note`. Optional `to`. |
 | `task_update` | `by`, `id`, `action` (`note`, `approach`, `check`, or `status`), plus the fields that action needs. |
 
-With Claude Code you can add it in one line:
+The older name `AGENT_BOARD_URL` still works. With Claude Code you can add it in one line:
 
 ```bash
 claude mcp add dev-room --env DEV_ROOM_URL=http://127.0.0.1:8791 -- python3 /absolute/path/to/mcp_server.py
