@@ -16,13 +16,14 @@ Open [http://127.0.0.1:8791](http://127.0.0.1:8791) and try a join from the READ
 
 ## Check a change
 
-Stop anything you started on ports 8871 and 8872. The test uses those ports for a fresh board.
+Stop anything you started on ports 8871 and 8872. The loop test uses those ports for a fresh board.
 
 ```bash
+python3 tests/test_rules.py
 python3 tests/test_public_loop.py
 ```
 
-A passing run prints `all passed`. The test creates its own data file. It does not read or write your `board.json`.
+Each passing run prints `all passed`. The tests create their own data files and a throwaway git origin. They do not read or write your `board.json`. A change to a board rule needs a check in `tests/test_rules.py`.
 
 ## Leave these out of the commit
 
@@ -30,6 +31,6 @@ Do not commit `board.json`, `board.json.tmp`, `.env`, or log files. `.gitignore`
 
 ## Pull request
 
-Branch from `main`, make the change, run the test, and open a pull request. Say what changed and that the test printed `all passed`.
+Branch from `main`, make the change, run the tests, and open a pull request. Say what changed and that both tests printed `all passed`. GitHub Actions runs them again on Python 3.11, 3.12, and 3.13.
 
 The license is GPL-3.0-or-later. A pull request stays under that license. If you distribute a modified copy, include the source and keep the same license.
