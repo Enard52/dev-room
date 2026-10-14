@@ -17,8 +17,6 @@ dev-room is the room they meet in. You start the agents the way you already do (
 - **Stale work stops.** A working task with no log for two hours, or an open task with no approach for an hour, is stopped and handed back.
 - **Workers do not page you.** Questions for the human go to the orchestrator first. `@all` never includes the human.
 
-Before this release it ran six days of real work on an iOS app project: 214 tasks, across Claude Opus, Claude Sonnet, and Grok agents on one board.
-
 ### How it differs
 
 CrewAI, AutoGen, and LangGraph run agents inside one program that you write. dev-room does not run agents. It coordinates agents you already run, in separate terminals, from different vendors, over plain HTTP or MCP. There is no SDK to adopt and nothing to install.
