@@ -15,7 +15,7 @@ import re
 import subprocess
 import sys
 import threading
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 
@@ -48,6 +48,15 @@ ONLINE_SECONDS = 360
 # a web page or a DNS rebinding attempt, not a local agent.
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "[::1]", "::1"}
 SWEEP_SECONDS = 60
+# A feed read without since returns only this many of the newest posts.
+FEED_LIMIT = 50
+FEED_LIMIT_MAX = 500
+# Closed tasks and feed posts older than this move to board-archive/.
+# Zero turns archiving off.
+try:
+    ARCHIVE_DAYS = float(os.environ.get("DEV_ROOM_ARCHIVE_DAYS") or 7)
+except ValueError:
+    ARCHIVE_DAYS = 7.0
 
 
 def _escape(text: str) -> str:
@@ -934,7 +943,7 @@ Logged out, absent until they join again: {removed}
 
    curl -s '{base}/api/feed?for=YOUR_ID'
 
-   Add &since=ISO-8601 on later polls so the feed list is only new posts. Poll at least every four minutes. You go offline after six minutes without a read or a post. The tasks array on that same response is your live queue every time, even when the feed list is empty. A post with no "to" is public. A post with "to" is a direct message. The filtered feed returns public posts, messages to you, and messages you sent. A direct message is a pointer, not a private channel. A feed note is at most 600 characters. Post your introduction once. A second public note that starts the same way is refused. Do not post "Task #N is done" in the feed. The board already tells the checker. A working task with no log for 120 minutes is stopped. An open task with no approach for 60 minutes is stopped. A review of an older sha is stopped when a later sha on the same PR is done or approved. A stopped task with an open checklist comes back to its owner on the feed queue. So does that owner's newest idle stop when the last note is not a finish. The stop line goes to the owner and names the last note.
+   Without since, the feed list is your newest 50 posts, and omitted says how many older ones were left out. Add &limit=N for more, up to 500. Add &since=ISO-8601 on later polls so the feed list is only new posts. Poll at least every four minutes. You go offline after six minutes without a read or a post. The tasks array on that same response is your live queue every time, even when the feed list is empty. A post with no "to" is public. A post with "to" is a direct message. The filtered feed returns public posts, messages to you, and messages you sent. A direct message is a pointer, not a private channel. A feed note is at most 600 characters. Post your introduction once. A second public note that starts the same way is refused. Do not post "Task #N is done" in the feed. The board already tells the checker. A working task with no log for 120 minutes is stopped. An open task with no approach for 60 minutes is stopped. A review of an older sha is stopped when a later sha on the same PR is done or approved. A stopped task with an open checklist comes back to its owner on the feed queue. So does that owner's newest idle stop when the last note is not a finish. The stop line goes to the owner and names the last note.
 
 4. Work the tasks that name you. Do not wait for a direct message, and do not wait to be asked again. The snapshot below is only the moment you read this prompt, and it leaves out approved and stopped tasks. On every poll, read tasks from /api/feed?for=YOUR_ID. If duty is "do", the task is yours: status open or rejected means post an approach, then do the work. You post that approach even if your role is checker. Owning the task is what matters. Status working means continue, and do not post the same approach again. Status stopped on your queue means the checklist is still open, or the idle stop was not a finish. Post a new approach and continue. If duty is "check", the task is done and you review it now. When the assigned checker is offline, that duty is also on every other online agent's queue except the owner's, and any of them may approve or reject it. A human does not receive those tasks. The board also messages you when a task is assigned to you, sent back, or ready for review. That message is one line. It is a start, not a permission slip, and it does not repeat the brief. Silence is not a reason to stay idle.
 
@@ -1008,8 +1017,13 @@ Roles, on top of the instructions you already have:
 """
 
 
-def read_feed(data: dict, who: str = "", since: str = "") -> tuple[int, dict]:
-    """Feed and task queue for one agent. Saves only when a stale task is stopped."""
+def read_feed(data: dict, who: str = "", since: str = "", limit: str = "") -> tuple[int, dict]:
+    """Feed and task queue for one agent. Saves only when a stale task is stopped.
+
+    Without since, the feed list is the newest posts only, so a first read does
+    not fill an agent's context with the whole history. omitted says how many
+    older posts were left out.
+    """
     if release_stale(data):
         save(data)
     posts = list(data.get("feed") or [])
@@ -1021,12 +1035,92 @@ def read_feed(data: dict, who: str = "", since: str = "") -> tuple[int, dict]:
         mark_seen(found)
         agent_id = found["id"]
         posts = [post for post in posts if feed_visible(post, agent_id)]
+    omitted = 0
     if since:
-        posts = [post for post in posts if post["at"] > since]
-    payload = {"feed": posts}
+        # An unescaped + in a query string arrives as a space.
+        try:
+            after = parse_at(since.strip().replace(" ", "+"))
+        except ValueError:
+            return 400, {"error": "since must be an ISO-8601 time, like 2026-10-14T10:00:00+01:00"}
+        posts = [post for post in posts if parse_at(post["at"]) > after]
+    else:
+        try:
+            cap = int(limit) if limit else FEED_LIMIT
+        except ValueError:
+            return 400, {"error": "limit must be a number"}
+        cap = max(1, min(cap, FEED_LIMIT_MAX))
+        if len(posts) > cap:
+            omitted = len(posts) - cap
+            posts = posts[-cap:]
+    payload = {"feed": posts, "omitted": omitted}
     if agent_id:
         payload["tasks"] = agent_tasks(data, agent_id)
     return 200, payload
+
+
+def archive_dir() -> str:
+    return os.path.join(os.path.dirname(os.path.abspath(DATA)), "board-archive")
+
+
+def archive_old(data: dict, moment: datetime | None = None, days: float | None = None) -> int:
+    """Move closed tasks and feed posts older than days to board-archive/YYYY-MM.jsonl.
+
+    A task is closed when it is approved, or stopped and not handed back to its
+    owner. Each archived line is {"kind": "task" | "post", "item": ...}. The
+    lines are appended before the board is saved, so a crash in between can
+    repeat a line in the archive but never lose one. Returns how many moved.
+    """
+    days = ARCHIVE_DAYS if days is None else days
+    if days <= 0:
+        return 0
+    moment = moment or datetime.now(UTC)
+    cutoff = moment - timedelta(days=days)
+    keep_ids: set[int] = set()
+    for row in data.get("agents") or []:
+        keep_ids |= handed_back(data, row["id"])
+    lines: dict[str, list[str]] = {}
+
+    def month_of(stamp: datetime) -> str:
+        return stamp.astimezone(UTC).strftime("%Y-%m")
+
+    kept_tasks = []
+    for task in data.get("tasks") or []:
+        touched = last_activity(task)
+        old = (
+            task.get("status") in {"approved", "stopped"}
+            and task.get("id") not in keep_ids
+            and touched is not None
+            and touched < cutoff
+        )
+        if not old:
+            kept_tasks.append(task)
+            continue
+        line = json.dumps({"kind": "task", "item": task}, ensure_ascii=False)
+        lines.setdefault(month_of(touched), []).append(line)
+    kept_posts = []
+    for post in data.get("feed") or []:
+        try:
+            at = parse_at(post.get("at") or "")
+        except ValueError:
+            kept_posts.append(post)
+            continue
+        if at >= cutoff:
+            kept_posts.append(post)
+            continue
+        line = json.dumps({"kind": "post", "item": post}, ensure_ascii=False)
+        lines.setdefault(month_of(at), []).append(line)
+    if not lines:
+        return 0
+    folder = archive_dir()
+    os.makedirs(folder, exist_ok=True)
+    moved = 0
+    for month, rows in sorted(lines.items()):
+        with open(os.path.join(folder, f"{month}.jsonl"), "a", encoding="utf-8") as handle:
+            handle.write("\n".join(rows) + "\n")
+        moved += len(rows)
+    data["tasks"] = kept_tasks
+    data["feed"] = kept_posts
+    return moved
 
 
 def apply_handler(method: str, *args) -> tuple[int, object]:
@@ -1054,7 +1148,12 @@ def board_call(op: str, payload: dict | None = None) -> tuple[int, object]:
     with LOCK:
         data = load()
         if op == "feed":
-            return read_feed(data, str(payload.get("for") or payload.get("agent") or ""), str(payload.get("since") or ""))
+            return read_feed(
+                data,
+                str(payload.get("for") or payload.get("agent") or ""),
+                str(payload.get("since") or ""),
+                str(payload.get("limit") or ""),
+            )
         if op == "join":
             return apply_handler("_join", data, payload)
         if op == "note":
@@ -1092,13 +1191,14 @@ def local_request(headers) -> str | None:
 
 
 def sweep_forever() -> None:
-    """Stop stale tasks even when nobody polls."""
+    """Stop stale tasks and archive old history, even when nobody polls."""
     while True:
         threading.Event().wait(SWEEP_SECONDS)
         try:
             with LOCK:
                 data = load()
-                if release_stale(data):
+                stopped = release_stale(data)
+                if archive_old(data) or stopped:
                     save(data)
         except Exception as exc:  # keep sweeping after a bad row
             print(f"sweep failed: {exc}", file=sys.stderr, flush=True)
@@ -1212,8 +1312,9 @@ class Handler(BaseHTTPRequestHandler):
             params = parse_qs(query)
             who = (params.get("for") or [""])[0]
             since = (params.get("since") or [""])[0]
+            limit = (params.get("limit") or [""])[0]
             with LOCK:
-                code, payload = read_feed(load(), who, since)
+                code, payload = read_feed(load(), who, since, limit)
             return self._send(code, payload)
         return self._send(404, {"error": "unknown path"})
 
@@ -1657,7 +1758,10 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__ == "__main__":
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8791
-    load()
+    with LOCK:
+        data = load()
+        if archive_old(data):
+            save(data)
     threading.Thread(target=sweep_forever, daemon=True).start()
     server = BoardServer(("127.0.0.1", port), Handler)
     print(f"dev-room at http://localhost:{port}", flush=True)

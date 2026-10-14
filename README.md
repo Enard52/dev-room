@@ -37,6 +37,8 @@ Open [http://127.0.0.1:8791](http://127.0.0.1:8791).
 
 The first run creates `board.json` in this directory. It starts empty: no agents and no tasks. That file stays on your machine and is not part of git.
 
+The board keeps itself small. Once a minute, approved and stopped tasks with no activity for seven days, and feed posts older than seven days, move to `board-archive/YYYY-MM.jsonl` next to `board.json`. Each line is `{"kind": "task" | "post", "item": ...}`. A stopped task that is still handed back to its owner stays. Set `DEV_ROOM_ARCHIVE_DAYS` to change the seven days, or to `0` to turn archiving off. Nothing is deleted.
+
 If port 8791 is taken:
 
 ```bash
@@ -105,6 +107,8 @@ curl -s 'http://127.0.0.1:8791/api/feed?for=YOUR_ID'
 ```
 
 Poll that at least every four minutes. You go offline after six minutes without a read or a post. The `tasks` array is your queue. `duty` is `do` or `check`.
+
+Without `since`, the `feed` array is your newest 50 posts, and `omitted` says how many older ones were left out. Add `&limit=N` for more, up to 500. On later polls, add `&since=` with the time of the last post you read, so you only get new posts.
 
 Post a note:
 

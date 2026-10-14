@@ -201,6 +201,59 @@ def main():
         returned = server.handed_back(server.load(), "cy")
     check("the idle task goes back to its owner", idle in returned, returned)
 
+    # A feed read without since is capped, so a first read stays small.
+    with server.LOCK:
+        data = server.load()
+        for n in range(server.FEED_LIMIT + 20):
+            data["feed"].append({"id": data["next_feed_id"], "at": server.now(), "by": "ora", "to": None,
+                                 "mentions": [], "to_all": False, "note": f"filler {n}"})
+            data["next_feed_id"] += 1
+        server.save(data)
+        total = sum(1 for post in data["feed"] if server.feed_visible(post, "cy"))
+    code, feed, _ = http("GET", base, "/api/feed?for=cy")
+    check("a first feed read is capped", code == 200 and len(feed["feed"]) == server.FEED_LIMIT
+          and feed["omitted"] == total - server.FEED_LIMIT and feed["feed"][-1]["note"].startswith("filler"),
+          (len(feed["feed"]), feed.get("omitted")))
+    code, feed, _ = http("GET", base, "/api/feed?for=cy&limit=5")
+    check("limit picks the newest posts", code == 200 and [p["note"] for p in feed["feed"]][-1] == f"filler {server.FEED_LIMIT + 19}"
+          and len(feed["feed"]) == 5, len(feed.get("feed") or []))
+    code, feed, _ = http("GET", base, "/api/feed?for=cy&since=2000-01-01T00:00:00+00:00")
+    check("since is not capped", code == 200 and len(feed["feed"]) == total and feed["omitted"] == 0, len(feed["feed"]))
+    mcp_feed = mcp_server.call_tool("feed", {"agent": "cy", "limit": 3})
+    check("mcp feed takes a limit", len(mcp_feed["feed"]) == 3, len(mcp_feed["feed"]))
+
+    # Old closed tasks and old posts move to board-archive/, the rest stays.
+    with server.LOCK:
+        data = server.load()
+        approved = {"id": 900, "title": "Old approved", "owner": "ivy", "checker": "cy", "status": "approved",
+                    "created_at": "2026-01-02T10:00:00+00:00", "updated_at": "2026-01-02T10:00:00+00:00",
+                    "log": [{"at": "2026-01-02T10:00:00+00:00", "by": "cy", "kind": "status",
+                             "status": "approved", "text": ""}], "checklist": []}
+        held = {"id": 901, "title": "Old stopped with open items", "owner": "ivy", "checker": "cy",
+                "status": "stopped", "created_at": "2026-01-02T10:00:00+00:00",
+                "updated_at": "2026-01-02T10:00:00+00:00",
+                "log": [{"at": "2026-01-02T10:00:00+00:00", "by": "cy", "kind": "status",
+                         "status": "stopped", "text": ""}],
+                "checklist": [{"id": "L1", "severity": "major", "file": "a", "what": "b", "done": False}]}
+        old_post = {"id": 9000, "at": "2026-01-03T10:00:00+00:00", "by": "ora", "to": None,
+                    "mentions": [], "to_all": False, "note": "an old post"}
+        data["tasks"] += [approved, held]
+        data["feed"].insert(0, old_post)
+        live_ids = {task["id"] for task in data["tasks"] if task["id"] not in (900, 901)}
+        moved = server.archive_old(data)
+        server.save(data)
+        kept = {task["id"] for task in data["tasks"]}
+    path = os.path.join(server.archive_dir(), "2026-01.jsonl")
+    rows = [json.loads(line) for line in open(path, encoding="utf-8")] if os.path.exists(path) else []
+    check("archive moves the old approved task and the old post",
+          moved == 2 and {(r["kind"], r["item"]["id"]) for r in rows} == {("task", 900), ("post", 9000)}, rows)
+    check("archive keeps recent tasks and a task handed back to its owner",
+          live_ids <= kept and 901 in kept and 900 not in kept, kept)
+    with server.LOCK:
+        again = server.archive_old(server.load())
+        off = server.archive_old(server.load(), days=0)
+    check("a second archive pass moves nothing, and days=0 is off", again == 0 and off == 0, (again, off))
+
     # MCP answers with the protocol version the client asked for.
     hello = mcp_server.handle({"jsonrpc": "2.0", "id": 1, "method": "initialize",
                                "params": {"protocolVersion": "2025-06-18"}})

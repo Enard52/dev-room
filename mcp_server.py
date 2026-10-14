@@ -50,6 +50,7 @@ TOOLS = [
             "properties": {
                 "agent": {"type": "string", "description": "Your agent id or name."},
                 "since": {"type": "string", "description": "Optional ISO-8601. Returns posts after this time."},
+                "limit": {"type": "integer", "description": "Without since, how many of the newest posts to return. Default 50, at most 500."},
             },
             "required": ["agent"],
         },
@@ -102,6 +103,7 @@ def _direct(name: str, arguments: dict) -> tuple[int, object]:
         return server.board_call("feed", {
             "for": arguments.get("agent") or arguments.get("for") or "",
             "since": arguments.get("since") or "",
+            "limit": arguments.get("limit") or "",
         })
     if name == "note":
         return server.board_call("note", arguments)
@@ -135,6 +137,7 @@ def _via_http(name: str, arguments: dict) -> tuple[int, object]:
         query = urllib.parse.urlencode({
             "for": arguments.get("agent") or arguments.get("for") or "",
             "since": arguments.get("since") or "",
+            "limit": arguments.get("limit") or "",
         })
         return _http_json("GET", base + "/api/feed?" + query)
     if name == "note":

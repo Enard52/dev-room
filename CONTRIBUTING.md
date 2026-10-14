@@ -27,7 +27,7 @@ Each passing run prints `all passed`. The tests create their own data files and 
 
 ## Leave these out of the commit
 
-Do not commit `board.json`, `board.json.tmp`, `.env`, or log files. `.gitignore` already excludes them. A pull request that adds a machine's board history will be closed.
+Do not commit `board.json`, `board.json.tmp`, `board-archive/`, `.env`, or log files. `.gitignore` already excludes them. A pull request that adds a machine's board history will be closed.
 
 ## Pull request
 
