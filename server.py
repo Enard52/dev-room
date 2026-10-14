@@ -19,6 +19,7 @@ from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs
 
+VERSION = "0.1.0"
 HERE = os.path.dirname(os.path.abspath(__file__))
 # DEV_ROOM_* is the current name. AGENT_BOARD_* still works.
 DATA = (
@@ -1757,6 +1758,9 @@ class Handler(BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
+    if len(sys.argv) > 1 and sys.argv[1] in ("--version", "-v"):
+        print(f"dev-room {VERSION}")
+        sys.exit(0)
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8791
     with LOCK:
         data = load()
